@@ -1790,9 +1790,21 @@ func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, inf
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 
-		jreq, err := json.Marshal(&tailcfg.DERPAdmitClientRequest{
-			NodePublic: clientKey,
-			Source:     clientIP,
+		// The request carries the client's optional admission
+		// credentials from its ClientInfo, so private-DERP
+		// admission controllers can check a username and token
+		// alongside the client's public key.
+		jreq, err := json.Marshal(&struct {
+			tailcfg.DERPAdmitClientRequest
+			Username string `json:",omitempty"`
+			AuthHash string `json:",omitempty"`
+		}{
+			DERPAdmitClientRequest: tailcfg.DERPAdmitClientRequest{
+				NodePublic: clientKey,
+				Source:     clientIP,
+			},
+			Username: info.GetAuthUsername(),
+			AuthHash: info.GetAuthToken(),
 		})
 		if err != nil {
 			return err
