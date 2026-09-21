@@ -415,6 +415,10 @@ func (c *Conn) derpWriteChanForRegion(regionID tailcfg.DERPRegionID, peer key.No
 	})
 	dc.HealthTracker = c.health
 	dc.AppName = c.derpAppName
+	if da := c.derpAuth.Load(); da != nil {
+		dc.AuthUsername = da.username
+		dc.AuthToken = da.token
+	}
 	if c.extraRootCAs != nil {
 		dc.TLSConfig = &tls.Config{RootCAs: c.extraRootCAs}
 	}
@@ -800,6 +804,22 @@ func (c *Conn) SetOnlyTCP443(v bool) {
 // instead.
 func (c *Conn) SetDERPMap(dm *tailcfg.DERPMap) {
 	c.setDERPMap(dm, true)
+}
+
+// derpAdmissionCreds holds optional admission credentials sent in
+// the ClientInfo when dialing DERP servers.
+type derpAdmissionCreds struct {
+	username, token string
+}
+
+// SetDERPAuth sets optional admission credentials for private DERP
+// servers whose admission controller checks a username and token:
+// they are sent in the ClientInfo (sealed to the server's key) and
+// forwarded by the server to its admission controller. Call before
+// Start or before the first connection to a region; credentials
+// already-dialed regions are not re-dialed.
+func (c *Conn) SetDERPAuth(username, token string) {
+	c.derpAuth.Store(&derpAdmissionCreds{username: username, token: token})
 }
 
 // SetDERPMapWithoutReSTUN is like [Conn.SetDERPMap] but does not trigger a
