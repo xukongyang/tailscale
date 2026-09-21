@@ -253,6 +253,12 @@ type Conn struct {
 	// lock ordering deadlocks. See issue 3726 and mu field docs.
 	derpMapAtomic atomic.Pointer[tailcfg.DERPMap]
 
+	// derpAuth, if non-nil, holds optional admission credentials
+	// sent in the ClientInfo when dialing DERP servers; see
+	// SetDERPAuth. For use with NewRegionClient's callback, same
+	// as derpMapAtomic.
+	derpAuth atomic.Pointer[derpAdmissionCreds]
+
 	lastNetCheckReport atomic.Pointer[netcheck.Report]
 
 	// port is the preferred port from opts.Port; 0 means auto.
