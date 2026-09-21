@@ -63,6 +63,13 @@ type Client struct {
 	IsProber      bool               // optional; for probers to optional declare themselves as such
 	AppName       string             // optional; opaque app name to advertise to the server for stats
 
+	// AuthUsername and AuthToken are optional admission credentials
+	// for private DERP servers, sent in the ClientInfo and forwarded
+	// by the server to its admission controller. See
+	// [derp.ClientInfo.AuthUsername].
+	AuthUsername string
+	AuthToken    string
+
 	// WatchConnectionChanges is whether the client wishes to subscribe to
 	// notifications about clients connecting & disconnecting.
 	//
@@ -416,6 +423,8 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 			derp.CanAckPings(c.canAckPings),
 			derp.IsProber(c.IsProber),
 			derp.AppName(c.AppName),
+			derp.AuthUsername(c.AuthUsername),
+			derp.AuthToken(c.AuthToken),
 		)
 		if err != nil {
 			return nil, 0, err
@@ -562,6 +571,8 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 		derp.CanAckPings(c.canAckPings),
 		derp.IsProber(c.IsProber),
 		derp.AppName(c.AppName),
+		derp.AuthUsername(c.AuthUsername),
+		derp.AuthToken(c.AuthToken),
 	)
 	if err != nil {
 		return nil, 0, err

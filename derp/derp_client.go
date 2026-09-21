@@ -35,6 +35,9 @@ type Client struct {
 	isProber    bool
 	appName     string
 
+	authUsername string // optional; sent in ClientInfo for private-DERP admission
+	authToken    string // optional; sent in ClientInfo for private-DERP admission
+
 	wmu  sync.Mutex // hold while writing to bw
 	bw   *bufio.Writer
 	rate *rate.Limiter // if non-nil, rate limiter to use
@@ -62,6 +65,9 @@ type clientOpt struct {
 	CanAckPings bool
 	IsProber    bool
 	AppName     string
+
+	AuthUsername string
+	AuthToken    string
 }
 
 // MeshKey returns a ClientOpt to pass to the DERP server during connect to get
@@ -92,6 +98,20 @@ func CanAckPings(v bool) ClientOpt {
 // or NewClient returns an error.
 func AppName(name string) ClientOpt {
 	return clientOptFunc(func(o *clientOpt) { o.AppName = name })
+}
+
+// AuthUsername and AuthToken return ClientOpt values carrying
+// optional admission credentials for private DERP servers. They are
+// sent in the ClientInfo and forwarded by the server to its
+// admission controller; see [ClientInfo.AuthUsername].
+func AuthUsername(name string) ClientOpt {
+	return clientOptFunc(func(o *clientOpt) { o.AuthUsername = name })
+}
+
+// AuthToken returns a ClientOpt to set the admission token sent in
+// the ClientInfo. See [AuthUsername].
+func AuthToken(tok string) ClientOpt {
+	return clientOptFunc(func(o *clientOpt) { o.AuthToken = tok })
 }
 
 // MaxAppNameLen is the maximum length in bytes of a [ClientInfo.AppName].
@@ -127,17 +147,19 @@ func NewClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf 
 
 func newClient(privateKey key.NodePrivate, nc Conn, brw *bufio.ReadWriter, logf logger.Logf, opt clientOpt) (*Client, error) {
 	c := &Client{
-		privateKey:  privateKey,
-		publicKey:   privateKey.Public(),
-		logf:        logf,
-		nc:          nc,
-		br:          brw.Reader,
-		bw:          brw.Writer,
-		meshKey:     opt.MeshKey,
-		canAckPings: opt.CanAckPings,
-		isProber:    opt.IsProber,
-		appName:     opt.AppName,
-		clock:       tstime.StdClock{},
+		privateKey:   privateKey,
+		publicKey:    privateKey.Public(),
+		logf:         logf,
+		nc:           nc,
+		br:           brw.Reader,
+		bw:           brw.Writer,
+		meshKey:      opt.MeshKey,
+		canAckPings:  opt.CanAckPings,
+		isProber:     opt.IsProber,
+		appName:      opt.AppName,
+		authUsername: opt.AuthUsername,
+		authToken:    opt.AuthToken,
+		clock:        tstime.StdClock{},
 	}
 	if opt.ServerPub.IsZero() {
 		if err := c.recvServerKey(); err != nil {
@@ -216,6 +238,17 @@ type ClientInfo struct {
 	// valid per [ValidAppName] or the server rejects the
 	// connection.
 	AppName string `json:",omitempty"`
+
+	// AuthUsername and AuthToken are optional admission
+	// credentials for private DERP servers: the server forwards
+	// them verbatim to its admission controller (the URL named by
+	// derper's --verify-client-url) alongside the client's public
+	// key. Their interpretation, including the token's format and
+	// lifetime, is entirely up to that controller. Note that the
+	// ClientInfo as a whole is sealed to the server's key, so the
+	// credentials are not sent in the clear even outside TLS.
+	AuthUsername string `json:",omitempty"`
+	AuthToken    string `json:",omitempty"`
 }
 
 // Equal reports if two clientInfo values are equal.
@@ -223,19 +256,39 @@ func (c *ClientInfo) Equal(other *ClientInfo) bool {
 	if c == nil || other == nil {
 		return c == other
 	}
-	if c.Version != other.Version || c.CanAckPings != other.CanAckPings || c.IsProber != other.IsProber || c.AppName != other.AppName {
+	if c.Version != other.Version || c.CanAckPings != other.CanAckPings || c.IsProber != other.IsProber || c.AppName != other.AppName ||
+		c.AuthUsername != other.AuthUsername || c.AuthToken != other.AuthToken {
 		return false
 	}
 	return c.MeshKey.Equal(other.MeshKey)
 }
 
+// GetAuthUsername returns c.AuthUsername, or the empty string if c
+// is nil.
+func (c *ClientInfo) GetAuthUsername() string {
+	if c == nil {
+		return ""
+	}
+	return c.AuthUsername
+}
+
+// GetAuthToken returns c.AuthToken, or the empty string if c is nil.
+func (c *ClientInfo) GetAuthToken() string {
+	if c == nil {
+		return ""
+	}
+	return c.AuthToken
+}
+
 func (c *Client) sendClientKey() error {
 	msg, err := json.Marshal(ClientInfo{
-		Version:     ProtocolVersion,
-		MeshKey:     c.meshKey,
-		CanAckPings: c.canAckPings,
-		IsProber:    c.isProber,
-		AppName:     c.appName,
+		Version:      ProtocolVersion,
+		MeshKey:      c.meshKey,
+		CanAckPings:  c.canAckPings,
+		IsProber:     c.isProber,
+		AppName:      c.appName,
+		AuthUsername: c.authUsername,
+		AuthToken:    c.authToken,
 	})
 	if err != nil {
 		return err
