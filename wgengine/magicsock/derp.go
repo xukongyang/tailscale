@@ -416,8 +416,7 @@ func (c *Conn) derpWriteChanForRegion(regionID tailcfg.DERPRegionID, peer key.No
 	dc.HealthTracker = c.health
 	dc.AppName = c.derpAppName
 	if da := c.derpAuth.Load(); da != nil {
-		dc.AuthUsername = da.username
-		dc.AuthToken = da.token
+		dc.SetAuth(da.username, da.token)
 	}
 	if c.extraRootCAs != nil {
 		dc.TLSConfig = &tls.Config{RootCAs: c.extraRootCAs}
@@ -822,11 +821,21 @@ type derpAdmissionCreds struct {
 // SetDERPAuth sets optional admission credentials for private DERP
 // servers whose admission controller checks a username and token:
 // they are sent in the ClientInfo (sealed to the server's key) and
-// forwarded by the server to its admission controller. Call before
-// Start or before the first connection to a region; credentials
-// already-dialed regions are not re-dialed.
+// forwarded by the server to its admission controller. Calling it
+// again updates the credentials stored for future regions and the
+// ones already handed to established DERP clients, so their next
+// reconnection carries the new token; callers typically rotate the
+// token on a timer and rely on this to keep long-lived connections
+// reconnectable.
 func (c *Conn) SetDERPAuth(username, token string) {
 	c.derpAuth.Store(&derpAdmissionCreds{username: username, token: token})
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, ad := range c.activeDerp {
+		if ad.c != nil {
+			ad.c.SetAuth(username, token)
+		}
+	}
 }
 
 // SetDERPMapWithoutReSTUN is like [Conn.SetDERPMap] but does not trigger a
