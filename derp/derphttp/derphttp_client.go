@@ -66,9 +66,17 @@ type Client struct {
 	// AuthUsername and AuthToken are optional admission credentials
 	// for private DERP servers, sent in the ClientInfo and forwarded
 	// by the server to its admission controller. See
-	// [derp.ClientInfo.AuthUsername].
+	// [derp.ClientInfo.AuthUsername]. They are read each time a
+	// connection is established, so credentials rotated via SetAuth
+	// apply to reconnections without recreating the client.
 	AuthUsername string
 	AuthToken    string
+
+	// authMu guards AuthUsername and AuthToken above, so SetAuth can
+	// rotate the token while another goroutine is reading them to
+	// establish a connection. It is a leaf lock: it is never held
+	// while acquiring any other lock.
+	authMu sync.Mutex
 
 	// WatchConnectionChanges is whether the client wishes to subscribe to
 	// notifications about clients connecting & disconnecting.
@@ -200,6 +208,27 @@ func (c *Client) isStarted() bool {
 func (c *Client) Connect(ctx context.Context) error {
 	_, _, err := c.connect(ctx, "derphttp.Client.Connect")
 	return err
+}
+
+// SetAuth atomically updates the admission credentials sent in the
+// ClientInfo each time this client connects or reconnects. It is
+// safe to call concurrently with a connection attempt on another
+// goroutine; the attempt picks up whichever credentials were
+// current when it read them, and the next reconnection picks up
+// the update.
+func (c *Client) SetAuth(username, token string) {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+	c.AuthUsername = username
+	c.AuthToken = token
+}
+
+// authSnapshot returns the admission credentials to send on a
+// connection being established now.
+func (c *Client) authSnapshot() (username, token string) {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+	return c.AuthUsername, c.AuthToken
 }
 
 // newContext returns a new context for setting up a new DERP connection.
@@ -418,13 +447,14 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 			return nil, 0, err
 		}
 		brw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+		authUser, authToken := c.authSnapshot()
 		derpClient, err := derp.NewClient(c.privateKey, conn, brw, c.logf,
 			derp.MeshKey(c.MeshKey),
 			derp.CanAckPings(c.canAckPings),
 			derp.IsProber(c.IsProber),
 			derp.AppName(c.AppName),
-			derp.AuthUsername(c.AuthUsername),
-			derp.AuthToken(c.AuthToken),
+			derp.AuthUsername(authUser),
+			derp.AuthToken(authToken),
 		)
 		if err != nil {
 			return nil, 0, err
@@ -565,14 +595,15 @@ func (c *Client) connect(ctx context.Context, caller string) (client *derp.Clien
 			return nil, 0, fmt.Errorf("GET failed: %v: %s", err, b)
 		}
 	}
+	authUser, authToken := c.authSnapshot()
 	derpClient, err = derp.NewClient(c.privateKey, httpConn, brw, c.logf,
 		derp.MeshKey(c.MeshKey),
 		derp.ServerPublicKey(serverPub),
 		derp.CanAckPings(c.canAckPings),
 		derp.IsProber(c.IsProber),
 		derp.AppName(c.AppName),
-		derp.AuthUsername(c.AuthUsername),
-		derp.AuthToken(c.AuthToken),
+		derp.AuthUsername(authUser),
+		derp.AuthToken(authToken),
 	)
 	if err != nil {
 		return nil, 0, err
